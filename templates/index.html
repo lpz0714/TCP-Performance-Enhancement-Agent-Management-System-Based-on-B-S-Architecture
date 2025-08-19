@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>TCP性能增强代理管理系统</title>
+    <style>
+        body { background: #f2f8f6; font-family: "微软雅黑", Arial, sans-serif; }
+        h1 { margin-top: 30px; }
+        .container { width: 80%; margin: 30px auto; }
+        .status-panel { display: flex; justify-content: space-between; margin-bottom: 30px; }
+        .node-status { background: #fff; border-radius: 10px; padding: 20px; width: 45%; box-shadow: 0 2px 8px #eee; }
+        .status-dot { display: inline-block; width: 16px; height: 16px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+        .status-dot.red { background: #e74c3c; }
+        .status-dot.green { background: #2ecc71; }
+        .status-dot.yellow { background: #f1c40f; }
+        .status-msg { margin-top: 10px; color: #888; font-size: 15px; }
+        .status-msg.error { color: #e74c3c; }
+        .control-panel { text-align: center; margin-top: 30px;}
+        .btn { padding: 10px 30px; margin: 0 10px; border: none; border-radius: 5px; color: #fff; font-size: 16px; cursor: pointer; transition: all 0.3s ease; }
+        .btn.green { background: #27ae60; }
+        .btn.red { background: #e74c3c; }
+        .btn.blue { background: #2980b9; }
+        .btn.disabled, .btn:disabled { background: #aaa !important; cursor: not-allowed; }
+        .btn:hover:not(.disabled) { opacity: 0.9; transform: translateY(-1px); }
+        .pep-config-panel { background: #fff; border-radius: 10px; padding: 20px; margin-bottom: 30px; box-shadow: 0 2px 8px #eee; }
+        .pep-config { float: left; width: 45%; margin-right: 5%; }
+        .pep-config:last-child { margin-right: 0; }
+        .pep-config label { display: block; margin-top: 10px; }
+        .pep-config input { width: 90%; padding: 8px; margin-top: 3px; border: 1px solid #ccc; border-radius: 4px; transition: border-color 0.3s ease; }
+        .pep-config input:focus { border-color: #2980b9; outline: none; }
+        .toast { position: fixed; top: 20px; right: 20px; padding: 15px 25px; border-radius: 5px; color: white; display: none; animation: fadeIn 0.3s ease; }
+        .toast.success { background: #2ecc71; }
+        .toast.error { background: #e74c3c; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div id="toast" class="toast"></div>
+    <h1 style="text-align:center;">TCP性能增强代理管理系统</h1>
+    <div class="container">
+        <div class="status-panel">
+            <div class="node-status" id="nodeB-status">
+                <h3>节点B ({{ nodes['B']['self_ip'] }})</h3>
+                <span class="status-dot" id="dot-B"></span>
+                <span id="status-text-B"></span>
+                <div id="status-msg-B" class="status-msg"></div>
+            </div>
+            <div class="node-status" id="nodeC-status">
+                <h3>节点C ({{ nodes['C']['self_ip'] }})</h3>
+                <span class="status-dot" id="dot-C"></span>
+                <span id="status-text-C"></span>
+                <div id="status-msg-C" class="status-msg"></div>
+            </div>
+        </div>
+        <div class="pep-config-panel">
+            <form id="pep-config-form" onsubmit="saveConfig();return false;">
+                <div class="pep-config">
+                    <h4>节点B配置</h4>
+                    <label>本机IP</label>
+                    <input type="text" id="B-self_ip" required pattern="^(\d{1,3}\.){3}\d{1,3}$" title="请输入有效的IP地址">
+                    <label>本机端口</label>
+                    <input type="number" id="B-self_port" required min="1024" max="65535" title="端口范围：1024-65535">
+                    <label>对端IP</label>
+                    <input type="text" id="B-peer_ip" required pattern="^(\d{1,3}\.){3}\d{1,3}$" title="请输入有效的IP地址">
+                    <label>对端端口</label>
+                    <input type="number" id="B-peer_port" required min="1024" max="65535" title="端口范围：1024-65535">
+                </div>
+                <div class="pep-config">
+                    <h4>节点C配置</h4>
+                    <label>本机IP</label>
+                    <input type="text" id="C-self_ip" required pattern="^(\d{1,3}\.){3}\d{1,3}$" title="请输入有效的IP地址">
+                    <label>本机端口</label>
+                    <input type="number" id="C-self_port" required min="1024" max="65535" title="端口范围：1024-65535">
+                    <label>对端IP</label>
+                    <input type="text" id="C-peer_ip" required pattern="^(\d{1,3}\.){3}\d{1,3}$" title="请输入有效的IP地址">
+                    <label>对端端口</label>
+                    <input type="number" id="C-peer_port" required min="1024" max="65535" title="端口范围：1024-65535">
+                </div>
+                <div style="clear:both"></div>
+                <button type="submit" class="btn blue" style="margin-top:20px;">保存配置</button>
+            </form>
+        </div>
+        <div class="control-panel">
+            <button id="start-btn" class="btn green" onclick="startPEP()">启动PEP</button>
+            <button id="stop-btn" class="btn red" onclick="stopPEP()">停止PEP</button>
+            <button id="restart-btn" class="btn blue" onclick="restartPEP()">重启PEP</button>
+        </div>
+    </div>
+    <script>
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast ${type}`;
+            toast.style.display = 'block';
+            setTimeout(() => {
+                toast.style.display = 'none';
+            }, 3000);
+        }
+
+        function setAllNodesStatus(status, msg) {
+            for (let node of ["B", "C"]) {
+                let dot = document.getElementById("dot-" + node);
+                let text = document.getElementById("status-text-" + node);
+                let msgDiv = document.getElementById("status-msg-" + node);
+                if (status === "starting" || status === "restarting") {
+                    dot.className = "status-dot yellow";
+                    text.innerText = "启动中";
+                }
+                msgDiv.innerText = msg;
+                if (msg.includes("失败")) {
+                    msgDiv.classList.add("error");
+                } else {
+                    msgDiv.classList.remove("error");
+                }
+            }
+        }
+
+        function updateStatus() {
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(data => {
+                    for (let node of ["B", "C"]) {
+                        let dot = document.getElementById("dot-" + node);
+                        let text = document.getElementById("status-text-" + node);
+                        let msg = document.getElementById("status-msg-" + node);
+                        if (data[node].status === "running") {
+                            dot.className = "status-dot green";
+                            text.innerText = "已启动";
+                        } else if (data[node].status === "starting") {
+                            dot.className = "status-dot yellow";
+                            text.innerText = "启动中";
+                        } else {
+                            dot.className = "status-dot red";
+                            text.innerText = "已停止";
+                        }
+                        msg.innerText = data[node].msg;
+                        if (data[node].msg.includes("失败")) {
+                            msg.classList.add("error");
+                        } else {
+                            msg.classList.remove("error");
+                        }
+                    }
+                    updateButtonStates(data);
+                })
+                .catch(error => {
+                    console.error('状态更新失败:', error);
+                    showToast('状态更新失败', 'error');
+                });
+        }
+
+        function updateButtonStates(data) {
+            let startBtn = document.getElementById("start-btn");
+            let restartBtn = document.getElementById("restart-btn");
+            let stopBtn = document.getElementById("stop-btn");
+            
+            const isRunning = data["B"].status === "running" || data["C"].status === "running";
+            const isStarting = data["B"].status === "starting" || data["C"].status === "starting";
+            
+            startBtn.disabled = isRunning || isStarting;
+            stopBtn.disabled = !isRunning;
+            restartBtn.disabled = !isRunning;
+            
+            startBtn.classList.toggle("disabled", startBtn.disabled);
+            stopBtn.classList.toggle("disabled", stopBtn.disabled);
+            restartBtn.classList.toggle("disabled", restartBtn.disabled);
+        }
+
+        function startPEP() {
+            setAllNodesStatus("starting", "正在启动...");
+            fetch('/api/start', {method: 'POST'})
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showToast('PEP启动请求已发送');
+                    } else {
+                        showToast(data.error || '启动失败', 'error');
+                    }
+                })
+                .catch(error => {
+                    console.error('启动失败:', error);
+                    showToast('启动请求失败', 'error');
+                })
+                .finally(() => setTimeout(updateStatus, 500));
+        }
+
+        function stopPEP() {
+            fetch('/api/stop', {method: 'POST'})
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showToast('PEP停止请求已发送');
+                    } else {
+                        showToast(data.error || '停止失败', 'error');
+                    }
+                })
+                .catch(error => {
+                    console.error('停止失败:', error);
+                    showToast('停止请求失败', 'error');
+                })
+                .finally(() => setTimeout(updateStatus, 500));
+        }
+
+        function restartPEP() {
+            setAllNodesStatus("restarting", "正在重启...");
+            fetch('/api/restart', {method: 'POST'})
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showToast('PEP重启请求已发送');
+                    } else {
+                        showToast(data.error || '重启失败', 'error');
+                    }
+                })
+                .catch(error => {
+                    console.error('重启失败:', error);
+                    showToast('重启请求失败', 'error');
+                })
+                .finally(() => setTimeout(updateStatus, 500));
+        }
+
+        function saveConfig() {
+            let data = {
+                B: {
+                    self_ip: document.getElementById("B-self_ip").value,
+                    self_port: parseInt(document.getElementById("B-self_port").value),
+                    peer_ip: document.getElementById("B-peer_ip").value,
+                    peer_port: parseInt(document.getElementById("B-peer_port").value)
+                },
+                C: {
+                    self_ip: document.getElementById("C-self_ip").value,
+                    self_port: parseInt(document.getElementById("C-self_port").value),
+                    peer_ip: document.getElementById("C-peer_ip").value,
+                    peer_port: parseInt(document.getElementById("C-peer_port").value)
+                }
+            };
+            fetch('/api/save_config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showToast('配置已保存');
+                } else {
+                    showToast(data.error || '保存失败', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('保存失败:', error);
+                showToast('保存请求失败', 'error');
+            });
+        }
+
+        function loadConfig() {
+            fetch('/api/get_config')
+                .then(r => r.json())
+                .then(data => {
+                    for (let node of ["B", "C"]) {
+                        document.getElementById(node+"-self_ip").value = data[node].self_ip;
+                        document.getElementById(node+"-self_port").value = data[node].self_port;
+                        document.getElementById(node+"-peer_ip").value = data[node].peer_ip;
+                        document.getElementById(node+"-peer_port").value = data[node].peer_port;
+                    }
+                })
+                .catch(error => {
+                    console.error('加载配置失败:', error);
+                    showToast('加载配置失败', 'error');
+                });
+        }
+
+        setInterval(updateStatus, 1000);
+        window.onload = function() {
+            updateStatus();
+            loadConfig();
+        }
+    </script>
+</body>
+</html>
